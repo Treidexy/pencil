@@ -1,0 +1,343 @@
+fn main() {
+	let src = std::fs::read_to_string("./samples/snake.pencil").unwrap();
+	let mut lex_errors = Vec::<LexError>::new();
+	let tokens = Lexer::lex(&src.as_str(), &mut lex_errors);
+	println!("{:?}", tokens);
+}
+
+#[derive(Debug)]
+enum TokenKind {
+	Error,
+	Float(f64),
+	Name(String),
+
+	And,
+	Or,
+
+	Plus,
+	Minus,
+	Slash,
+	Star,
+	Percent,
+	Pipe,
+	Bang,
+
+	LParen,
+	RParen,
+	LBrace,
+	RBrace,
+	LBracket,
+	RBracket,
+	LAngle,
+	RAngle,
+
+	Arrow,
+
+	Equal,
+	Comma,
+	Dot,
+	DotDot,
+	Eof,
+}
+
+#[derive(Debug)]
+struct Token {
+	span: Span,
+	kind: TokenKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Span {
+	start: usize,
+	end: usize,
+}
+
+#[derive(Debug)]
+enum Type {
+	Float,
+	Struct(Vec<(String, Type)>),
+	List(Box<Type>),
+}
+
+#[derive(Debug)]
+enum ConditionKind {
+	Eq(Expr, Expr),
+	Ne(Expr, Expr),
+	Lt(Expr, Expr),
+	Le(Expr, Expr),
+	Gt(Expr, Expr),
+	Ge(Expr, Expr),
+
+	And(Box<Condition>, Box<Condition>),
+	Or(Box<Condition>, Box<Condition>),
+	Not(Box<Condition>),
+}
+
+#[derive(Debug)]
+struct Condition {
+	span: Span,
+	kind: ConditionKind,
+}
+
+#[derive(Debug)]
+struct Expr {
+	span: Span,
+	kind: ExprKind,
+}
+
+#[derive(Debug)]
+enum ExprKind {
+	Literal(f32),
+	Add(Box<Expr>, Box<Expr>),
+	Sub(Box<Expr>, Box<Expr>),
+	Mul(Box<Expr>, Box<Expr>),
+	Div(Box<Expr>, Box<Expr>),
+	Mod(Box<Expr>, Box<Expr>),
+	Joi(Box<Expr>, Box<Expr>),
+	Pow(Box<Expr>, Box<Expr>),
+	Struct(Vec<(Option<String>, Expr)>),
+	Call(String, Vec<Expr>),
+	PieceWise(Vec<(Condition, Expr)>, Box<Expr>),
+}
+
+#[derive(Debug)]
+enum LexErrorKind {
+	Unexpected(char),
+}
+
+#[derive(Debug)]
+struct LexError {
+	span: Span,
+	kind: LexErrorKind,
+}
+
+struct Lexer<'src, 'error_list> {
+	src: &'src [u8],
+	pos: usize,
+	error_list: &'error_list mut Vec<LexError>,
+}
+
+impl<'src, 'error_list> Lexer<'src, 'error_list> {
+	pub fn lex(src: &'src str, error_list: &'error_list mut Vec<LexError>) -> Vec<Token> {
+		let mut lexer = Lexer {
+			src: src.as_bytes(),
+			pos: 0,
+			error_list,
+		};
+
+		let mut tokens = Vec::<Token>::new();
+
+		lexer.skip_whitespace();
+		while !lexer.at_eof() {
+			tokens.push(lexer.lex_next());
+			lexer.skip_whitespace();
+		}
+
+		tokens.push(Token {
+			span: Span {
+				start: src.len(),
+				end: src.len(),
+			},
+			kind: TokenKind::Eof,
+		});
+
+		tokens
+	}
+
+	fn lex_next(&mut self) -> Token {
+		match self.peek(0) {
+			b'+' => {
+				self.const_token(TokenKind::Plus, 1)
+			},
+			b'-' => {
+				if self.peek(1) == b'>' {
+					self.const_token(TokenKind::Arrow, 2)
+				} else {
+					self.const_token(TokenKind::Minus, 1)
+				}
+			},
+			b'/' => {
+				self.const_token(TokenKind::Slash, 1)
+			},
+			b'*' => {
+				self.const_token(TokenKind::Star, 1)
+			},
+			b'%' => {
+				self.const_token(TokenKind::Percent, 1)
+			},
+			b'|' => {
+				self.const_token(TokenKind::Pipe, 1)
+			},
+			b'!' => {
+				self.const_token(TokenKind::Bang, 1)
+			},
+			b'(' => {
+				self.const_token(TokenKind::LParen, 1)
+			},
+			b')' => {
+				self.const_token(TokenKind::RParen, 1)
+			},
+			b'{' => {
+				self.const_token(TokenKind::LBrace, 1)
+			},
+			b'}' => {
+				self.const_token(TokenKind::RBrace, 1)
+			},
+			b'[' => {
+				self.const_token(TokenKind::LBracket, 1)
+			},
+			b']' => {
+				self.const_token(TokenKind::RBracket, 1)
+			},
+			b'<' => {
+				self.const_token(TokenKind::LAngle, 1)
+			},
+			b'>' => {
+				self.const_token(TokenKind::RAngle, 1)
+			},
+			b'=' => {
+				self.const_token(TokenKind::Equal, 1)
+			},
+			b',' => {
+				self.const_token(TokenKind::Comma, 1)
+			},
+			b'.' => {
+				if self.peek(1) == b'.' {
+					self.const_token(TokenKind::DotDot, 2)
+				} else {
+					self.const_token(TokenKind::Dot, 1)
+				}
+			},
+			_ => {
+				if self.peek(0).is_ascii_digit() || self.peek(0) == b'.' {
+					self.lex_float()
+				} else if self.peek(0).is_ascii_alphanumeric() {
+					self.lex_name()
+				} else {
+					self.report_unexpected_token(self.peek(0) as char)
+				}
+			},
+		}
+	}
+
+	fn lex_float(&mut self) -> Token {
+		let start = self.pos;
+		let mut str = String::new();
+		while self.peek(0).is_ascii_digit() || self.peek(0) == b'.' {
+			if self.peek(0) == b'.' && self.peek(1) == b'.' {
+				break;
+			}
+
+			str.push(self.next() as char);
+		}
+
+		let span = Span {
+			start,
+			end: self.pos,
+		};
+
+		Token {
+			span,
+			kind: TokenKind::Float(str.parse::<f64>().expect(format!("{}", str).as_str())),
+		}
+	}
+
+	fn lex_name(&mut self) -> Token {
+		let start = self.pos;
+		let mut name = String::new();
+		while self.peek(0).is_ascii_alphanumeric() {
+			name.push(self.next() as char);
+		}
+
+		let span = Span {
+			start,
+			end: self.pos,
+		};
+
+		match name.as_str() {
+			"and" => {
+				self.span_token(TokenKind::And, span)
+			},
+			"or" => {
+				self.span_token(TokenKind::Or, span)
+			},
+			_ => {
+				Token {
+					span,
+					kind: TokenKind::Name(name),
+				}
+			}
+		}
+
+		
+	}
+
+	fn const_token(&mut self, kind: TokenKind, len: usize) -> Token {
+		let tok = Token {
+			span: Span {
+				start: self.pos,
+				end: self.pos + len,
+			},
+			kind,
+		};
+
+		self.pos += len;
+
+		tok
+	}
+
+	fn span_token(&self, kind: TokenKind, span: Span) -> Token {
+		let tok = Token {
+			span,
+			kind,
+		};
+
+		tok
+	}
+
+	fn report_unexpected_token(&mut self, c: char) -> Token {
+		let span = Span {
+			start: self.pos,
+			end: self.pos + 1,
+		};
+
+		self.error_list.push(LexError {
+			span,
+			kind: LexErrorKind::Unexpected(c),
+		});
+
+		let tok = Token {
+			span,
+			kind: TokenKind::Error,
+		};
+
+		self.pos += 1;
+
+		tok
+	}
+
+	fn skip_whitespace(&mut self) {
+		while !self.at_eof() && self.peek(0).is_ascii_whitespace() {
+			self.pos += 1;
+		}
+	}
+
+	fn peek(&self, offset: isize) -> u8 {
+		let pos = (self.pos as isize + offset) as usize;
+		if pos < 0 || pos >= self.src.len() {
+			b'\0'
+		} else {
+			self.src[pos]
+		}
+	}
+
+	fn next(&mut self) -> u8 {
+		let c = self.peek(0);
+		self.pos += 1;
+		c
+	}
+
+	fn at_eof(&self) -> bool {
+		self.pos >= self.src.len()
+	}
+}
