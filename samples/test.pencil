@@ -1,2 +1,4 @@
 alive = 0 + 3 ^ 3
 notAlive = alive + 2
+array: [] = [ alive, notAlive ]
+lol: [] = [ alive, notAlive ]

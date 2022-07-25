@@ -4,6 +4,7 @@ pub(crate) use crate::lex::{ Span, Token, TokenKind };
 pub enum TypeKind {
 	Float,
 	Struct(Vec<(String, Type)>),
+	Array(Box<Type>, usize),
 	List(Box<Type>),
 }
 
@@ -13,7 +14,7 @@ pub struct Type {
 	pub kind: TypeKind,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ConditionKind {
 	Eq(Expr, Expr),
 	Ne(Expr, Expr),
@@ -27,19 +28,19 @@ pub enum ConditionKind {
 	Not(Box<Condition>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Condition {
 	pub span: Span,
 	pub kind: ConditionKind,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Expr {
 	pub span: Span,
 	pub kind: ExprKind,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExprKind {
 	Literal(f64),
 	Add(Box<Expr>, Box<Expr>),
@@ -111,7 +112,7 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 	fn parse_bin_expr(&mut self, precedence: Precedence) -> Expr {
 		let mut left = self.parse_unary_expr();
 
-		while self.peek(0).kind != TokenKind::Eof && precedence < self.peek(0).kind.precedence() {
+		while self.peek(0).kind != TokenKind::Eof && self.peek(0).kind.precedence() > 0 && precedence < self.peek(0).kind.precedence() {
 			let op = &self.next().kind;
 			let right = self.parse_bin_expr(op.precedence());
 			left = Expr {
@@ -162,21 +163,56 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 			TokenKind::LBracket => {
 				let mut exprs = Vec::new();
 
-				self.next();
-				while self.peek(0).kind != TokenKind::RBracket {
+				while self.peek(0).kind != TokenKind::RBracket && self.peek(0).kind != TokenKind::SemiColon && self.peek(0).kind != TokenKind::Eof {
 					exprs.push(self.parse_expr());
 					if self.peek(0).kind == TokenKind::Comma {
 						self.next();
-					} else {
+					} else if self.peek(0).kind != TokenKind::RBracket && self.peek(0).kind != TokenKind::SemiColon {
 						todo!("err")
 					}
 				}
 
-				self.next();
+				if self.peek(0).kind == TokenKind::SemiColon {
+					self.next();
+					let len = if let TokenKind::Float(len) = self.next().kind {
+						len as usize
+					} else {
+						exprs.len()
+					};
 
-				Expr {
-					span: tok.span,
-					kind: ExprKind::Array(exprs),
+					if exprs.len() > len {
+						todo!("err")
+					}
+
+					while len > exprs.len() {
+						exprs.push(exprs.last().unwrap().clone());
+					}
+
+					let rbrace = self.next();
+					if rbrace.kind != TokenKind::RBracket {
+						todo!()
+					}
+
+					Expr {
+						span: Span {
+							start: tok.span.start,
+							end: rbrace.span.end,
+						},
+						kind: ExprKind::Array(exprs),
+					}
+				} else {
+					let rbrace = self.next();
+					if rbrace.kind != TokenKind::RBracket {
+						todo!()
+					}
+	
+					Expr {
+						span: Span {
+							start: tok.span.start,
+							end: rbrace.span.end,
+						},
+						kind: ExprKind::Array(exprs),
+					}
 				}
 			},
 			TokenKind::Name(ref name) => {
@@ -186,7 +222,7 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 				}
 			},
 			_ => {
-				todo!()
+				todo!("{:?}", tok)
 			}
 		}
 	}
@@ -201,7 +237,53 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 
 impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 	fn parse_type(&mut self) -> Type {
-		todo!()
+		match self.peek(0).kind {
+			TokenKind::LBracket => {
+				self.next();
+				let inner_ty = if self.peek(0).kind != TokenKind::RBracket && self.peek(0).kind != TokenKind::SemiColon {
+					self.parse_type()
+				} else {
+					DEFAULT_TYPE
+				};
+
+				if self.peek(0).kind == TokenKind::SemiColon {
+					self.next();
+					
+					let len = if let TokenKind::Float(val) = self.next().kind {
+						val as usize
+					} else {
+						todo!()
+					};
+
+					if self.next().kind != TokenKind::RBracket {
+						todo!()
+					}
+
+					Type {
+						span: Span {
+							start: self.pos,
+							end: self.pos,
+						},
+						kind: TypeKind::Array(Box::new(inner_ty), len),
+					}
+				} else {
+					if self.next().kind != TokenKind::RBracket {
+						todo!()
+					}
+
+					Type {
+						span: Span {
+							start: self.peek(0).span.start,
+							end: self.peek(0).span.end,
+						},
+						kind: TypeKind::List(Box::new(inner_ty)),
+					}
+				}
+			},
+			_ => {
+				todo!()
+			},
+		}
 	}
 }
 

@@ -31,6 +31,7 @@ pub enum TokenKind {
 	Equal,
 	Comma,
 	Colon,
+	SemiColon,
 	Dot,
 	DotDot,
 	Eof,
@@ -157,6 +158,9 @@ impl<'src, 'error_list> Lexer<'src, 'error_list> {
 			},
 			b':' => {
 				self.const_token(TokenKind::Colon, 1)
+			},
+			b';' => {
+				self.const_token(TokenKind::SemiColon, 1)
 			},
 			b'.' => {
 				if self.peek(1) == b'.' {

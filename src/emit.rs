@@ -12,7 +12,7 @@ macro_rules! cstr {
 	};
 	() => {
 		::std::ffi::CString::new("").unwrap().as_ptr()
-	}
+	};
 }
 
 pub(crate) use cstr;
@@ -99,12 +99,60 @@ impl Emitter {
 			},
 			ExprKind::Name(val) => {
 				let var = *self.datas.get(val).unwrap();
-				LLVMBuildLoad2(self.builder, LLVMTypeOf(var), var, cstr!())
+				LLVMBuildLoad2(self.builder, LLVMGetElementType(LLVMTypeOf(var)), var, cstr!())
+			},
+			ExprKind::Array(exprs) => {
+				let exprs = exprs.iter().map(|expr| self.emit_expr(expr)).collect::<Vec<_>>();
+				let ty = if exprs.len() > 0 {
+					LLVMTypeOf(exprs[0])
+				} else {
+					LLVMVoidTypeInContext(self.ctx)
+				};
+
+				let len_expr = LLVMConstInt(LLVMInt64TypeInContext(self.ctx), exprs.len() as u64, 0);
+				let array = LLVMBuildArrayMalloc(self.builder, ty, len_expr, cstr!());
+				for (i, expr) in exprs.iter().enumerate() {
+					let ptr = LLVMBuildGEP2(self.builder, ty, array, as_ptr!([ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), i as u64, 0) ], LLVMValueRef), 1, cstr!());
+					LLVMBuildStore(self.builder, *expr, ptr);
+				}
+
+				let ptr = LLVMBuildBitCast(self.builder, array, LLVMPointerType(ty, 0), cstr!("s"));
+				let list = LLVMBuildAlloca(self.builder, self.emit_list_ty(ty), cstr!());
+				let ele_ptr = LLVMBuildGEP2(self.builder, LLVMTypeOf(ptr), list, as_ptr!([ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 0, 0) ], LLVMValueRef), 1, cstr!());
+				LLVMBuildStore(self.builder, ptr, ele_ptr);
+				let len_ptr = LLVMBuildGEP2(self.builder, LLVMTypeOf(len_expr), list, as_ptr!([ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 1, 0) ], LLVMValueRef), 1, cstr!());
+				LLVMBuildStore(self.builder, len_expr, len_ptr);
+				list
 			},
 			_ => {
 				todo!()
 			},
 		}
+	}
+}
+
+impl Emitter {
+	unsafe fn emit_ty(&mut self, ty: &TypeKind) -> LLVMTypeRef {
+		match *ty {
+			TypeKind::Float => fp_type(self.ctx),
+			TypeKind::Array(ref inner_ty, len) => {
+				let inner_ty = self.emit_ty(&inner_ty.as_ref().kind);
+				LLVMArrayType(inner_ty, len as u32)
+			},
+			TypeKind::List(ref inner_ty) => {
+				let inner_ty = self.emit_ty(&inner_ty.as_ref().kind);
+				self.emit_list_ty(inner_ty)
+			},
+			_ => {
+				todo!()
+			},
+		}
+	}
+
+	unsafe fn emit_list_ty(&mut self, inner_ty: LLVMTypeRef) -> LLVMTypeRef {
+		let ptr = LLVMPointerType(inner_ty, 0);
+		let mut x = [ ptr, LLVMInt64TypeInContext(self.ctx), LLVMInt64TypeInContext(self.ctx) ];
+		LLVMStructTypeInContext(self.ctx, as_ptr!(x, LLVMTypeRef), 2, 0)
 	}
 }
 
@@ -119,10 +167,7 @@ impl Emitter {
 			}
 
 			for var in &ast.vars {
-				let ty = match var.ty.kind {
-					TypeKind::Float => fp_type(self.ctx),
-					_ => todo!(),
-				};
+				let ty = self.emit_ty(&var.ty.kind);
 				
 				let ptr = LLVMAddGlobal(self.module, ty, cstr!(var.name.as_str()));
 				let init = self.emit_expr(&var.init);
