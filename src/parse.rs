@@ -1,4 +1,4 @@
-use crate::lex::{ Span, Token, TokenKind };
+pub(crate) use crate::lex::{ Span, Token, TokenKind };
 
 #[derive(Debug)]
 pub enum TypeKind {
@@ -9,8 +9,8 @@ pub enum TypeKind {
 
 #[derive(Debug)]
 pub struct Type {
-	span: Span,
-	kind: TypeKind,
+	pub span: Span,
+	pub kind: TypeKind,
 }
 
 #[derive(Debug)]
@@ -64,8 +64,20 @@ pub enum ParseErrorKind {
 
 #[derive(Debug)]
 pub struct ParseError {
-	span: Span,
-	kind: ParseErrorKind,
+	pub span: Span,
+	pub kind: ParseErrorKind,
+}
+
+pub struct Var {
+	pub span: Span,
+	pub name: String,
+	pub ty: Type,
+	pub init: Expr,
+}
+
+pub struct DataAst {
+	pub span: Span,
+	pub vars: Vec<Var>,
 }
 
 pub struct Parser<'toks, 'error_list> {
@@ -74,7 +86,7 @@ pub struct Parser<'toks, 'error_list> {
 	error_list: &'error_list mut Vec<ParseError>,
 }
 
-static EOF_TOKEN: Token = Token {
+const EOF_TOKEN: Token = Token {
 	span: Span {
 		start: 0,
 		end: 0,
@@ -82,16 +94,18 @@ static EOF_TOKEN: Token = Token {
 	kind: TokenKind::Eof,
 };
 
+const DEFAULT_TYPE: Type = Type {
+	span: Span {
+		start: 0,
+		end: 0,
+	},
+	kind: TypeKind::Float,
+};
+
 type Precedence = u8;
 impl<'toks, 'error_list> Parser<'toks, 'error_list> {
-	pub fn parse_expr(toks: &'toks [Token], error_list: &'error_list mut Vec<ParseError>) -> Expr {
-		let mut parser = Parser {
-			toks,
-			pos: 0,
-			error_list,
-		};
-
-		parser.parse_bin_expr(0)
+	fn parse_expr(&mut self) -> Expr {
+		self.parse_bin_expr(0)
 	}
 
 	fn parse_bin_expr(&mut self, precedence: Precedence) -> Expr {
@@ -150,7 +164,7 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 
 				self.next();
 				while self.peek(0).kind != TokenKind::RBracket {
-					exprs.push(Parser::parse_expr(&self.toks[self.pos..], self.error_list));
+					exprs.push(self.parse_expr());
 					if self.peek(0).kind == TokenKind::Comma {
 						self.next();
 					} else {
@@ -165,6 +179,12 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 					kind: ExprKind::Array(exprs),
 				}
 			},
+			TokenKind::Name(ref name) => {
+				Expr {
+					span: tok.span,
+					kind: ExprKind::Name(name.clone()),
+				}
+			},
 			_ => {
 				todo!()
 			}
@@ -173,13 +193,75 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 }
 
 impl<'toks, 'error_list> Parser<'toks, 'error_list> {
-	pub fn parse_condition(toks: &'toks [Token], error_list: &'error_list mut Vec<ParseError>) -> Condition {
+	fn parse_condition(&mut self) -> Condition {
+		todo!()
+	}
+}
+
+
+impl<'toks, 'error_list> Parser<'toks, 'error_list> {
+	fn parse_type(&mut self) -> Type {
 		todo!()
 	}
 }
 
 impl<'toks, 'error_list> Parser<'toks, 'error_list> {
-	fn peek(&self, offset: usize) -> &'toks Token {
+	pub fn parse_data(toks: &'toks [Token], error_list: &'error_list mut Vec<ParseError>) -> DataAst {
+		let mut parser = Parser {
+			toks,
+			pos: 0,
+			error_list,
+		};
+
+		let mut vars = Vec::new();
+		while parser.peek(0).kind != TokenKind::Eof {
+			vars.push(parser.parse_var());
+		}
+
+		DataAst {
+			span: Span {
+				start: toks[0].span.start,
+				end: toks[toks.len() - 1].span.end,
+			},
+			vars,
+		}
+	}
+
+	fn parse_var(&mut self) -> Var {
+		let name_tok = self.next();
+		let name = if let TokenKind::Name(name) = &name_tok.kind {
+			name.clone()
+		} else {
+			todo!()
+		};
+
+		let ty = if self.peek(0).kind == TokenKind::Colon {
+			self.next();
+			self.parse_type()
+		} else {
+			DEFAULT_TYPE
+		};
+
+		if self.next().kind != TokenKind::Equal {
+			todo!()
+		}
+
+		let init = self.parse_expr();
+
+		Var {
+			span: Span {
+				start: name_tok.span.start,
+				end: init.span.end,
+			},
+			name,
+			ty,
+			init,
+		}
+	}
+}
+
+impl<'toks, 'error_list> Parser<'toks, 'error_list> {
+	pub(crate) fn peek(&self, offset: usize) -> &'toks Token {
 		let pos = self.pos + offset;
 		if pos < 0 || pos >= self.toks.len() {
 			&EOF_TOKEN
@@ -188,7 +270,7 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 		}
 	}
 
-	fn next(&mut self) -> &'toks Token {
+	pub(crate) fn next(&mut self) -> &'toks Token {
 		let tok = self.peek(0);
 		self.pos += 1;
 		tok

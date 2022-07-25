@@ -1,6 +1,2 @@
-6 * 9 + 7
-
-//alive = 0
-//direction: (x, y) = (0, 0)
-//body: [ (x, y) ] = [ (7, 8) ]
-//apple: (x, y) = (11, 8)
+alive = 0 + 3 ^ 3
+notAlive = alive + 2
