@@ -9,10 +9,11 @@ util
 	bw = width / rows
 	newHead = head + direction
 	gonnaEatApple = { newHead = apple }
-	selfCollisions = sum([ { newHead = body[i] } for i = [0..length(body)] ])
+	selfCollisions = sum([ { newHead = body[i] } for i = [0..#body] ])
+	gonnaDie = { newHead.x <= 0 and newHead.x > rows or newHead.y <= 0 or newHead.y > rows or selfCollisions > 0 }
 colors
 	bounds = rgb(0, 255, 0)
-	snake = rgb(0, 100, 255) | [ rgb(0, 0, 255) for i = [0..length(body) - 1] ]
+	snake = rgb(0, 100, 255) | [ rgb(0, 0, 255) for i = [0..#body - 1] ]
 	apple = rgb(255, 0, 0)
 	moveButton = rgb(64, 64, 64)
 	directionIndicator = rgb(150, 0, 255)
@@ -30,12 +31,20 @@ gui
 	<moveButton> rect(6 * buttonSize - 2, y, buttonSize, buttonSize, 5) -> setDir!(0, -1)
 actions
 	move!() = {
-		newHead.x <= 0 and newHead.x > rows or newHead.y <= 0 or newHead.y > rows or selfCollisions > 0: die!(),
+		gonnaDie: die!(),
 		gonnaEatApple: (body -> newHead | body, genApple!()),
-		(body -> newHead | [ body[i] for i = [0..length(body) - 1] ])
+		(body -> newHead | body[..1])
 	}
 	
-	setDir!(x, y) = { alive: { length(body) = 1: setDirInternal!(x, y), x = -direction.x: (), y = -direction.y, setDirInternal!(x, y) } }
+	setDir!(x, y) = {
+		alive: {
+			body.len = 1: setDirInternal!(x, y),
+			x = -direction.x,
+			y = -direction.y,
+			setDirInternal!(x, y)
+		}
+	}
+
 	setDirInternal!(x, y) = direction -> (x, y)
 data
 	alive = 0

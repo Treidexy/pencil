@@ -63,6 +63,7 @@ name = "pencil"
 version = "0.1.0"
 dependencies = [
  "llvm",
+ "llvm-sys",
 ]
 
 [[package]]
