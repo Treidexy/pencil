@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ptr::null_mut;
 
 use llvm_sys::core::*;
+use llvm_sys::execution_engine::LLVMCreateJITCompilerForModule;
 use llvm_sys::prelude::*;
 use LLVMDoubleTypeInContext as fp_type;
 use crate::parse::Mutation;
@@ -20,7 +21,7 @@ pub(crate) use cstr;
 
 pub struct Emitter {
 	ctx: LLVMContextRef,
-	module: LLVMModuleRef,
+	pub module: LLVMModuleRef,
 	builder: LLVMBuilderRef,
 	vars: HashMap<String, LLVMValueRef>,
 	funcs: HashMap<String, LLVMValueRef>,
@@ -49,10 +50,11 @@ impl Emitter {
 		}
 	}
 
-	pub fn print(&self) {
+	pub fn print_ir(&self) {
 		unsafe {
 			let out = LLVMPrintModuleToString(self.module);
 			println!("{}", std::ffi::CString::from_raw(out).to_str().unwrap());
+			LLVMDisposeMessage(out);
 		}
 	}
 }
@@ -93,6 +95,11 @@ impl Emitter {
 				&mut [ fp_type(self.ctx), fp_type(self.ctx) ] as *mut LLVMTypeRef, 2, 0);
 				let func = LLVMAddFunction(self.module, cstr!("pow"), ty);
 				LLVMBuildCall2(self.builder, ty, func, &mut [ left, right ] as *mut LLVMValueRef, 2, cstr!("pow"))
+			},
+			ExprKind::Join(left, right) => {
+				let left = self.emit_expr(left.as_ref());
+				let right = self.emit_expr(right.as_ref());
+				self.emit_join(left, right)
 			},
 			ExprKind::Neg(expr) => {
 				let expr = self.emit_expr(expr.as_ref());
@@ -150,6 +157,40 @@ impl Emitter {
 				todo!()
 			},
 		}
+	}
+
+	unsafe fn emit_join(&mut self, left: LLVMValueRef, right: LLVMValueRef) -> LLVMValueRef {
+		let ty = LLVMTypeOf(left);
+		let inner_ty = LLVMStructGetTypeAtIndex(ty, 0);
+		let left_len = LLVMBuildLoad2(self.builder, LLVMInt64TypeInContext(self.ctx), LLVMBuildGEP2(self.builder, ty, left,
+			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 1, 0) ] as *mut LLVMValueRef, 1, cstr!()), cstr!());
+		let right_len = LLVMBuildLoad2(self.builder, LLVMInt64TypeInContext(self.ctx), LLVMBuildGEP2(self.builder, ty, right,
+			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 1, 0) ] as *mut LLVMValueRef, 1, cstr!()), cstr!());
+		let len = LLVMBuildAdd(self.builder, left_len, right_len, cstr!());
+		
+		let ptr = LLVMBuildArrayMalloc(self.builder, inner_ty, len, cstr!());
+		let left_ptr = LLVMBuildGEP2(self.builder, ty, left,
+			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 0, 0) ] as *mut LLVMValueRef, 1, cstr!());
+		let right_ptr = LLVMBuildGEP2(self.builder, ty, right,
+			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 0, 0) ] as *mut LLVMValueRef, 1, cstr!());
+
+		// LLVMBuildMemCpy(self.builder, ptr,
+		// 	LLVMConstIntGetZExtValue(LLVMAlignOf(LLVMTypeOf(ptr))) as u32,
+		// 	left_ptr, LLVMConstIntGetZExtValue(LLVMAlignOf(LLVMTypeOf(left_ptr))) as u32, left_len);
+		// LLVMBuildMemCpy(self.builder, LLVMBuildAdd(self.builder, ptr, left_len, cstr!()),
+		// LLVMConstIntGetZExtValue(LLVMAlignOf(LLVMTypeOf(ptr))) as u32,
+		// right_ptr, LLVMConstIntGetZExtValue(LLVMAlignOf(LLVMTypeOf(right_ptr))) as u32, right_len);
+		LLVMBuildMemCpy(self.builder, ptr, 8, left_ptr, 8, left_len);
+		LLVMBuildMemCpy(self.builder, LLVMBuildAdd(self.builder, ptr, left_len, cstr!()), 8, right_ptr, 8, right_len);
+
+		let expr = LLVMBuildAlloca(self.builder, ty, cstr!());
+		let ptr_ptr = LLVMBuildGEP2(self.builder, ty, expr,
+			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 0, 0) ] as *mut LLVMValueRef, 1, cstr!());
+		let ptr_len = LLVMBuildGEP2(self.builder, ty, expr,
+			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 1, 0) ] as *mut LLVMValueRef, 1, cstr!());
+		LLVMBuildStore(self.builder, ptr, ptr_ptr);
+		LLVMBuildStore(self.builder, len, ptr_len);
+		expr
 	}
 }
 

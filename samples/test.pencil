@@ -6,3 +6,4 @@
 plus_one(x) = x + 1
 plus_three(x) = plus_one(x) + 2
 inc!(x, y) = x -> plus_one(x), y -> x
+join(a: [], b: []) -> [] = a | b
