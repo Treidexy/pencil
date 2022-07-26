@@ -40,28 +40,26 @@ fn main() {
 
 	let mut emitter = Emitter::new();
 	emitter.emit(&stmts);
-	emitter.print_ir();
-	return;
+	// emitter.print_ir();
 
-	let module = emitter.module;
-	unsafe {
-		LLVMLinkInMCJIT();
-		LLVM_InitializeNativeAsmPrinter();
-		LLVM_InitializeNativeAsmPrinter();
+	// let module = emitter.module;
+	// unsafe {
+	// 	LLVMLinkInMCJIT();
+	// 	LLVM_InitializeNativeAsmPrinter();
+	// 	LLVM_InitializeNativeAsmPrinter();
 
-		let mut engine: LLVMExecutionEngineRef = null_mut();
-		let mut options = LLVMMCJITCompilerOptions {
-			OptLevel: 0,
-			CodeModel: LLVMCodeModelDefault,
-			NoFramePointerElim: 1,
-			EnableFastISel: 0,
-			MCJMM: null_mut(),
-		};
-		let mut err = null_mut::<i8>();
-		if LLVMCreateMCJITCompilerForModule(&mut engine as *mut LLVMExecutionEngineRef, module,
-			&mut options as *mut LLVMMCJITCompilerOptions, size_of::<LLVMMCJITCompilerOptions>(), &mut err as *mut *mut i8) == 1 {
-			panic!("Error creating JIT compiler: {}", std::ffi::CString::from_raw(err).to_str().unwrap());
-		}
-	}
-
+	// 	let mut engine: LLVMExecutionEngineRef = null_mut();
+	// 	let mut options = LLVMMCJITCompilerOptions {
+	// 		OptLevel: 0,
+	// 		CodeModel: LLVMCodeModelDefault,
+	// 		NoFramePointerElim: 1,
+	// 		EnableFastISel: 0,
+	// 		MCJMM: null_mut(),
+	// 	};
+	// 	let mut err = null_mut::<i8>();
+	// 	if LLVMCreateMCJITCompilerForModule(&mut engine as *mut LLVMExecutionEngineRef, module,
+	// 		&mut options as *mut LLVMMCJITCompilerOptions, size_of::<LLVMMCJITCompilerOptions>(), &mut err as *mut *mut i8) == 1 {
+	// 		panic!("Error creating JIT compiler: {}", std::ffi::CString::from_raw(err).to_str().unwrap());
+	// 	}
+	// }
 }

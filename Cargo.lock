@@ -30,16 +30,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "349d5a591cd28b49e1d1037471617a32ddcda5731b99419008085f72d5a53836"
 
 [[package]]
-name = "llvm"
-version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33aeaf0ea7501b22c79ee4aa733ccbabdfce05e99021942c3e0beef838676ce7"
-dependencies = [
- "libc",
- "llvm-sys",
-]
-
-[[package]]
 name = "llvm-sys"
 version = "140.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -62,7 +52,6 @@ checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 name = "pencil"
 version = "0.1.0"
 dependencies = [
- "llvm",
  "llvm-sys",
 ]
 

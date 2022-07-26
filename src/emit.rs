@@ -1,10 +1,17 @@
 use std::collections::HashMap;
 use std::ptr::null_mut;
 
+use llvm_sys::analysis::LLVMVerifierFailureAction::*;
+use llvm_sys::analysis::*;
+use llvm_sys::bit_writer::LLVMWriteBitcodeToFile;
 use llvm_sys::core::*;
-use llvm_sys::execution_engine::LLVMCreateJITCompilerForModule;
 use llvm_sys::prelude::*;
-use LLVMDoubleTypeInContext as fp_type;
+use llvm_sys::target::*;
+use llvm_sys::target_machine::*;
+use llvm_sys::target_machine::LLVMCodeGenOptLevel::*;
+use llvm_sys::target_machine::LLVMRelocMode::*;
+use llvm_sys::target_machine::LLVMCodeModel::*;
+use llvm_sys::target_machine::LLVMCodeGenFileType::*;
 use crate::parse::Mutation;
 use crate::parse::{ Expr, ExprKind, Type, TypeKind, Var, Func, Action, Stmt };
 
@@ -27,7 +34,7 @@ pub(crate) use cstr;
 
 pub struct Emitter {
 	ctx: LLVMContextRef,
-	pub module: LLVMModuleRef,
+	module: LLVMModuleRef,
 	builder: LLVMBuilderRef,
 	vars: HashMap<String, LLVMValueRef>,
 	funcs: HashMap<String, LLVMValueRef>,
@@ -56,11 +63,18 @@ impl Emitter {
 		}
 	}
 
+	pub fn drop(&mut self) {
+		unsafe {
+			LLVMContextDispose(LLVMGetModuleContext(self.module));
+			LLVMDisposeBuilder(self.builder);
+			LLVMDisposeModule(self.module);
+		}
+	}
+
 	pub fn print_ir(&self) {
 		unsafe {
 			let out = LLVMPrintModuleToString(self.module);
 			println!("{}", std::ffi::CString::from_raw(out).to_str().unwrap());
-			LLVMDisposeMessage(out);
 		}
 	}
 }
@@ -97,8 +111,8 @@ impl Emitter {
 				let left = self.emit_expr(left.as_ref());
 				let right = self.emit_expr(right.as_ref());
 
-				let ty = LLVMFunctionType(fp_type(self.ctx),
-				&mut [ fp_type(self.ctx), fp_type(self.ctx) ] as *mut LLVMTypeRef, 2, 0);
+				let ty = LLVMFunctionType(self.fp_ty(),
+				&mut [ self.fp_ty(), self.fp_ty() ] as *mut LLVMTypeRef, 2, 0);
 				let func = LLVMAddFunction(self.module, cstr!("pow"), ty);
 				LLVMBuildCall2(self.builder, ty, func, &mut [ left, right ] as *mut LLVMValueRef, 2, cstr!("pow"))
 			},
@@ -112,7 +126,7 @@ impl Emitter {
 				LLVMBuildFNeg(self.builder, expr, cstr!())
 			},
 			ExprKind::Literal(val) => {
-				LLVMConstReal(fp_type(self.ctx), *val)
+				LLVMConstReal(self.fp_ty(), *val)
 			},
 			ExprKind::Name(name) => {
 				if let Some(param) = self.params.get(name) {
@@ -131,23 +145,24 @@ impl Emitter {
 					LLVMVoidTypeInContext(self.ctx)
 				};
 
-				let len_expr = LLVMConstInt(LLVMInt64TypeInContext(self.ctx), exprs.len() as u64, 0);
+				let len_expr = LLVMConstInt(self.len_ty(), exprs.len() as u64, 0);
 				let array = LLVMBuildArrayMalloc(self.builder, ty, len_expr, cstr!());
 				for (i, expr) in exprs.iter().enumerate() {
-					let ptr = LLVMBuildGEP2(self.builder, ty, array,
-						&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), i as u64, 0) ] as *mut LLVMValueRef, 1, cstr!());
+					let ptr = LLVMBuildInBoundsGEP2(self.builder, ty, array,
+						&mut [ LLVMConstInt(self.len_ty(), i as u64, 0) ] as *mut LLVMValueRef, 1, cstr!());
 					LLVMBuildStore(self.builder, *expr, ptr);
 				}
 
 				let ptr = LLVMBuildBitCast(self.builder, array, LLVMPointerType(ty, 0), cstr!("s"));
 				let list = LLVMBuildAlloca(self.builder, self.emit_list_ty(ty), cstr!());
-				let ele_ptr = LLVMBuildGEP2(self.builder, LLVMTypeOf(ptr), list,
-				&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 0, 0) ] as *mut LLVMValueRef, 1, cstr!());
+				let ele_ptr = LLVMBuildInBoundsGEP2(self.builder, LLVMTypeOf(ptr), list,
+				&mut [ LLVMConstInt(self.len_ty(), 0, 0) ] as *mut LLVMValueRef, 1, cstr!());
 				LLVMBuildStore(self.builder, ptr, ele_ptr);
-				let len_ptr = LLVMBuildGEP2(self.builder, LLVMTypeOf(len_expr), list,
-				&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 1, 0) ] as *mut LLVMValueRef, 1, cstr!());
+				let len_ptr = LLVMBuildInBoundsGEP2(self.builder, LLVMTypeOf(len_expr), list,
+				&mut [ LLVMConstInt(self.len_ty(), 1, 0) ] as *mut LLVMValueRef, 1, cstr!());
 				LLVMBuildStore(self.builder, len_expr, len_ptr);
-				list
+				
+				LLVMBuildLoad2(self.builder, LLVMGetElementType(LLVMTypeOf(list)), list, cstr!())
 			},
 			ExprKind::Call(name, args) => {
 				let mut args = args.iter().map(|arg| self.emit_expr(arg)).collect::<Vec<_>>();
@@ -166,44 +181,52 @@ impl Emitter {
 	}
 
 	unsafe fn emit_join(&mut self, left: LLVMValueRef, right: LLVMValueRef) -> LLVMValueRef {
-		let ty = LLVMTypeOf(left);
-		let inner_ty = LLVMStructGetTypeAtIndex(ty, 0);
-		let left_len = LLVMBuildLoad2(self.builder, LLVMInt64TypeInContext(self.ctx), LLVMBuildGEP2(self.builder, ty, left,
-			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 1, 0) ] as *mut LLVMValueRef, 1, cstr!()), cstr!());
-		let right_len = LLVMBuildLoad2(self.builder, LLVMInt64TypeInContext(self.ctx), LLVMBuildGEP2(self.builder, ty, right,
-			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 1, 0) ] as *mut LLVMValueRef, 1, cstr!()), cstr!());
-		let len = LLVMBuildAdd(self.builder, left_len, right_len, cstr!());
-		
-		let ptr = LLVMBuildArrayMalloc(self.builder, inner_ty, len, cstr!());
-		let left_ptr = LLVMBuildGEP2(self.builder, ty, left,
-			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 0, 0) ] as *mut LLVMValueRef, 1, cstr!());
-		let right_ptr = LLVMBuildGEP2(self.builder, ty, right,
-			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 0, 0) ] as *mut LLVMValueRef, 1, cstr!());
+		let left_struct = LLVMBuildAlloca(self.builder, LLVMTypeOf(left), cstr!("left_struct"));
+		let right_struct = LLVMBuildAlloca(self.builder, LLVMTypeOf(left), cstr!("right_struct"));
 
-		// LLVMBuildMemCpy(self.builder, ptr,
-		// 	LLVMConstIntGetZExtValue(LLVMAlignOf(LLVMTypeOf(ptr))) as u32,
-		// 	left_ptr, LLVMConstIntGetZExtValue(LLVMAlignOf(LLVMTypeOf(left_ptr))) as u32, left_len);
-		// LLVMBuildMemCpy(self.builder, LLVMBuildAdd(self.builder, ptr, left_len, cstr!()),
-		// LLVMConstIntGetZExtValue(LLVMAlignOf(LLVMTypeOf(ptr))) as u32,
-		// right_ptr, LLVMConstIntGetZExtValue(LLVMAlignOf(LLVMTypeOf(right_ptr))) as u32, right_len);
-		LLVMBuildMemCpy(self.builder, ptr, 8, left_ptr, 8, left_len);
-		LLVMBuildMemCpy(self.builder, LLVMBuildAdd(self.builder, ptr, left_len, cstr!()), 8, right_ptr, 8, right_len);
+		LLVMBuildStore(self.builder, left, left_struct);
+		LLVMBuildStore(self.builder, right, right_struct);
 
-		let expr = LLVMBuildAlloca(self.builder, ty, cstr!());
-		let ptr_ptr = LLVMBuildGEP2(self.builder, ty, expr,
-			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 0, 0) ] as *mut LLVMValueRef, 1, cstr!());
-		let ptr_len = LLVMBuildGEP2(self.builder, ty, expr,
-			&mut [ LLVMConstInt(LLVMInt64TypeInContext(self.ctx), 1, 0) ] as *mut LLVMValueRef, 1, cstr!());
-		LLVMBuildStore(self.builder, ptr, ptr_ptr);
-		LLVMBuildStore(self.builder, len, ptr_len);
-		expr
+		let list_ty = LLVMTypeOf(left);
+		let ele_ty = LLVMGetElementType(LLVMStructGetTypeAtIndex(list_ty, 0));
+		let ptr_ty = LLVMPointerType(ele_ty, 0);
+
+		let left_len = LLVMBuildStructGEP2(self.builder, list_ty, left_struct, 1, cstr!());
+		let left_len = LLVMBuildLoad2(self.builder, self.len_ty(), left_len, cstr!("left_len"));
+		let right_len = LLVMBuildStructGEP2(self.builder, list_ty, right_struct, 1, cstr!());
+		let right_len = LLVMBuildLoad2(self.builder, self.len_ty(), right_len, cstr!("right_len"));
+		let len = LLVMBuildAdd(self.builder, left_len, right_len, cstr!("len"));
+
+		let ptr = LLVMBuildArrayMalloc(self.builder, ele_ty, len, cstr!("ptr"));
+		let left_ptr = LLVMBuildStructGEP2(self.builder, list_ty, left_struct, 0, cstr!());
+		let left_ptr = LLVMBuildLoad2(self.builder, ptr_ty, left_ptr, cstr!("left_ptr"));
+		let right_ptr = LLVMBuildStructGEP2(self.builder, list_ty, right_struct, 0, cstr!());
+		let right_ptr = LLVMBuildLoad2(self.builder, ptr_ty, right_ptr, cstr!("right_ptr"));
+
+		let cpy_size = LLVMBuildMul(self.builder, left_len, LLVMSizeOf(ele_ty), cstr!("left_cpy_size"));
+		LLVMBuildMemCpy(self.builder, ptr, 8, left_ptr, 8, cpy_size);
+
+		let ptr_as_len = LLVMBuildPtrToInt(self.builder, ptr, self.len_ty(), cstr!());
+		let offsetted_ptr = LLVMBuildAdd(self.builder, ptr_as_len, cpy_size, cstr!());
+		let offsetted_ptr = LLVMBuildIntToPtr(self.builder, offsetted_ptr, LLVMTypeOf(ptr), cstr!("offsetted_ptr"));
+
+		let cpy_size = LLVMBuildMul(self.builder, right_len, LLVMSizeOf(ele_ty), cstr!("right_cpy_size"));
+		LLVMBuildMemCpy(self.builder, offsetted_ptr, 8, right_ptr, 8, cpy_size);
+
+		let list = LLVMBuildAlloca(self.builder, list_ty, cstr!("list"));
+		let list_ptr = LLVMBuildStructGEP2(self.builder, list_ty, list, 0, cstr!());
+		let list_len = LLVMBuildStructGEP2(self.builder, list_ty, list, 1, cstr!());
+		LLVMBuildStore(self.builder, ptr, list_ptr);
+		LLVMBuildStore(self.builder, len, list_len);
+
+		LLVMBuildLoad2(self.builder, LLVMGetElementType(LLVMTypeOf(list)), list, cstr!())
 	}
 }
 
 impl Emitter {
 	unsafe fn emit_ty(&mut self, ty: &TypeKind) -> LLVMTypeRef {
 		match *ty {
-			TypeKind::Float => fp_type(self.ctx),
+			TypeKind::Float => self.fp_ty(),
 			TypeKind::Array(ref inner_ty, len) => {
 				let inner_ty = self.emit_ty(&inner_ty.as_ref().kind);
 				LLVMArrayType(inner_ty, len as u32)
@@ -221,7 +244,15 @@ impl Emitter {
 	unsafe fn emit_list_ty(&mut self, inner_ty: LLVMTypeRef) -> LLVMTypeRef {
 		let ptr = LLVMPointerType(inner_ty, 0);
 		LLVMStructTypeInContext(self.ctx,
-			&mut [ ptr, LLVMInt64TypeInContext(self.ctx), LLVMInt64TypeInContext(self.ctx) ] as *mut LLVMTypeRef, 2, 0)
+			&mut [ ptr, self.len_ty() ] as *mut LLVMTypeRef, 2, 0)
+	}
+
+	unsafe fn fp_ty(&mut self) -> LLVMTypeRef {
+		LLVMDoubleTypeInContext(self.ctx)
+	}
+
+	unsafe fn len_ty(&mut self) -> LLVMTypeRef {
+		LLVMInt64TypeInContext(self.ctx)
 	}
 }
 
@@ -255,6 +286,43 @@ impl Emitter {
 			}
 
 			LLVMBuildRetVoid(self.builder);
+
+			let mut err_msg: *mut i8 = null_mut();
+			if LLVMPrintModuleToFile(self.module, cstr!("bin/test.ll"), &mut err_msg as *mut *mut i8) != 0 {
+				panic!("{}", from_cstr!(err_msg));
+			}
+
+			if LLVMVerifyModule(self.module, LLVMPrintMessageAction, &mut err_msg as *mut *mut i8) != 0 {
+				panic!();
+			}
+			
+			if LLVMWriteBitcodeToFile(self.module, cstr!("bin/test.bc")) != 0 {
+				panic!();
+			}
+			
+
+			LLVM_InitializeAllTargetInfos();
+			LLVM_InitializeAllTargets();
+			LLVM_InitializeAllTargetMCs();
+			LLVM_InitializeAllAsmParsers();
+			LLVM_InitializeAllAsmPrinters();
+
+			let triple = LLVMGetDefaultTargetTriple();
+			let mut target: LLVMTargetRef = null_mut();
+			if LLVMGetTargetFromTriple(triple, &mut target as *mut LLVMTargetRef, &mut err_msg as *mut *mut i8) != 0 {
+				panic!("{}", from_cstr!(err_msg));
+			}
+
+			let target_machine = LLVMCreateTargetMachine(target, triple, cstr!("generic"), cstr!(""),
+				LLVMCodeGenLevelAggressive, LLVMRelocDefault, LLVMCodeModelDefault);
+				if LLVMTargetMachineEmitToFile(target_machine, self.module, cstr!("bin/test.o") as *mut i8,
+						LLVMObjectFile, &mut err_msg as *mut *mut i8) != 0 {
+					panic!("{}", from_cstr!(err_msg));
+				}
+				if LLVMTargetMachineEmitToFile(target_machine, self.module, cstr!("bin/test.s") as *mut i8,
+						LLVMAssemblyFile, &mut err_msg as *mut *mut i8) != 0 {
+					panic!("{}", from_cstr!(err_msg));
+				}
 		}
 	}
 
