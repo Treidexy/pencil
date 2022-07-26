@@ -172,7 +172,7 @@ impl<'src, 'error_list> Lexer<'src, 'error_list> {
 			_ => {
 				if self.peek(0).is_ascii_digit() || self.peek(0) == b'.' {
 					self.lex_float()
-				} else if self.peek(0).is_ascii_alphanumeric() {
+				} else if self.peek(0).is_ascii_alphanumeric() || self.peek(0) == b'_' {
 					self.lex_name()
 				} else {
 					let c = self.next();
@@ -207,7 +207,7 @@ impl<'src, 'error_list> Lexer<'src, 'error_list> {
 	fn lex_name(&mut self) -> Token {
 		let start = self.pos;
 		let mut name = String::new();
-		while self.peek(0).is_ascii_alphanumeric() {
+		while self.peek(0).is_ascii_alphanumeric() || self.peek(0) == b'_' {
 			name.push(self.next() as char);
 		}
 

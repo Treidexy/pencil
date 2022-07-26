@@ -1,9 +1,17 @@
 pub(crate) use crate::lex::{ Span, Token, TokenKind };
 
+
+#[derive(Debug)]
+pub struct Param {
+	pub span: Span,
+	pub name: String,
+	pub ty: Type,
+}
+
 #[derive(Debug)]
 pub enum TypeKind {
 	Float,
-	Struct(Vec<(String, Type)>),
+	Struct(Vec<Param>),
 	Array(Box<Type>, usize),
 	List(Box<Type>),
 }
@@ -69,6 +77,7 @@ pub struct ParseError {
 	pub kind: ParseErrorKind,
 }
 
+#[derive(Debug)]
 pub struct Var {
 	pub span: Span,
 	pub name: String,
@@ -76,9 +85,36 @@ pub struct Var {
 	pub init: Expr,
 }
 
-pub struct DataAst {
+#[derive(Debug)]
+pub struct Func {
 	pub span: Span,
-	pub vars: Vec<Var>,
+	pub name: String,
+	pub params: Vec<Param>,
+	pub ret: Type,
+	pub body: Expr,
+}
+
+#[derive(Debug)]
+pub struct Mutation {
+	pub span: Span,
+	pub name: String,
+	pub expr: Expr,
+}
+
+#[derive(Debug)]
+pub struct Action {
+	pub span: Span,
+	pub name: String,
+	pub params: Vec<Param>,
+	pub body: Vec<Mutation>,
+}
+
+#[derive(Debug)]
+pub enum Stmt {
+	Var(Var),
+	Expr(Expr),
+	Func(Func),
+	Action(Action),
 }
 
 pub struct Parser<'toks, 'error_list> {
@@ -216,14 +252,49 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 				}
 			},
 			TokenKind::Name(ref name) => {
-				Expr {
-					span: tok.span,
-					kind: ExprKind::Name(name.clone()),
+				if self.peek(0).kind == TokenKind::LParen {
+					self.parse_call_expr(name.clone(), tok.span)
+				} else {
+					Expr {
+						span: tok.span,
+						kind: ExprKind::Name(name.clone()),
+					}
 				}
 			},
 			_ => {
 				todo!("{:?}", tok)
 			}
+		}
+	}
+
+	fn parse_call_expr(&mut self, name: String, name_span: Span) -> Expr {
+		let lparen = self.next();
+		if lparen.kind != TokenKind::LParen {
+			todo!()
+		}
+
+		let mut args = Vec::new();
+		while self.peek(0).kind != TokenKind::RParen && self.peek(0).kind != TokenKind::Eof {
+			args.push(self.parse_expr());
+			if self.peek(0).kind != TokenKind::Comma {
+				if self.peek(0).kind != TokenKind::RParen {
+					self.next();
+				}
+			} else {
+				todo!()
+			}
+		}
+
+		let rparen = self.next();
+		if rparen.kind != TokenKind::RParen {
+			todo!()
+		}
+		Expr {
+			span: Span {
+				start: name_span.start,
+				end: rparen.span.end,
+			},
+			kind: ExprKind::Call(name, args),
 		}
 	}
 }
@@ -234,6 +305,32 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 	}
 }
 
+impl<'toks, 'error_list> Parser<'toks, 'error_list> {
+	fn parse_mutation(&mut self) -> Mutation {
+		let name_tok = self.next();
+		let name = if let TokenKind::Name(name) = &name_tok.kind {
+			name.clone()
+		} else {
+			todo!()
+		};
+
+		let arrow = self.next();
+		if arrow.kind != TokenKind::Arrow {
+			todo!()
+		}
+
+		let expr = self.parse_expr();
+
+		Mutation {
+			span: Span {
+				start: name_tok.span.start,
+				end: expr.span.end,
+			},
+			name,
+			expr,
+		}
+	}
+}
 
 impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 	fn parse_type(&mut self) -> Type {
@@ -288,24 +385,199 @@ impl<'toks, 'error_list> Parser<'toks, 'error_list> {
 }
 
 impl<'toks, 'error_list> Parser<'toks, 'error_list> {
-	pub fn parse_data(toks: &'toks [Token], error_list: &'error_list mut Vec<ParseError>) -> DataAst {
+	pub fn parse(toks: &'toks [Token], error_list: &'error_list mut Vec<ParseError>) -> Vec<Stmt> {
 		let mut parser = Parser {
 			toks,
 			pos: 0,
 			error_list,
 		};
 
-		let mut vars = Vec::new();
+		let mut stmts = Vec::new();
 		while parser.peek(0).kind != TokenKind::Eof {
-			vars.push(parser.parse_var());
+			stmts.push(parser.parse_stmt());
 		}
 
-		DataAst {
-			span: Span {
-				start: toks[0].span.start,
-				end: toks[toks.len() - 1].span.end,
+		stmts
+	}
+
+	fn parse_stmt(&mut self) -> Stmt {
+		match self.peek(0).kind {
+			TokenKind::Name(_) => {
+				if self.peek(1).kind == TokenKind::LParen {
+					Stmt::Func(self.parse_func())
+				} else if self.peek(1).kind == TokenKind::Bang {
+					Stmt::Action(self.parse_action())
+				} else {
+					Stmt::Var(self.parse_var())
+				}
 			},
-			vars,
+			_ => {
+				Stmt::Expr(self.parse_expr())
+			},
+		}
+	}
+
+	fn parse_func(&mut self) -> Func {
+		let name_tok = self.next();
+		let name = if let TokenKind::Name(name) = &name_tok.kind {
+			name.clone()
+		} else {
+			todo!()
+		};
+
+		let lparen = self.next();
+		if lparen.kind != TokenKind::LParen {
+			todo!()
+		}
+
+		let mut params = Vec::new();
+		while self.peek(0).kind != TokenKind::RParen {
+			let name_tok = self.next();
+			let name = if let TokenKind::Name(name) = &name_tok.kind {
+				name.clone()
+			} else {
+				todo!("{:?}", name_tok)
+			};
+
+			if self.peek(0).kind == TokenKind::Colon {
+				self.next();
+				let ty = self.parse_type();
+				params.push(Param {
+					span: Span {
+						start: name_tok.span.start,
+						end: ty.span.end,
+					},
+					name,
+					ty,
+				});
+			} else {
+				params.push(Param {
+					span: name_tok.span,
+					name,
+					ty: DEFAULT_TYPE,
+				});
+			}
+			
+			if self.peek(0).kind != TokenKind::Comma {
+				if self.peek(0).kind != TokenKind::RParen {
+					todo!()
+				}
+			} else {
+				self.next();
+			}
+		}
+
+		let rparen = self.next();
+		if rparen.kind != TokenKind::RParen {
+			todo!()
+		}
+
+		let ret = if self.peek(0).kind == TokenKind::Arrow {
+			self.next();
+			self.parse_type()
+		} else {
+			DEFAULT_TYPE
+		};
+
+		let equal = self.next();
+		if equal.kind != TokenKind::Equal {
+			todo!()
+		}
+
+		let body = self.parse_expr();
+
+		Func {
+			span: Span {
+				start: name_tok.span.start,
+				end: body.span.end,
+			},
+			name,
+			params,
+			ret,
+			body,
+		}
+	}
+
+	fn parse_action(&mut self) -> Action {
+		let name_tok = self.next();
+		let name = if let TokenKind::Name(name) = &name_tok.kind {
+			name.clone()
+		} else {
+			todo!()
+		};
+
+		let bang = self.next();
+		if bang.kind != TokenKind::Bang {
+			todo!()
+		}
+
+		let lparen = self.next();
+		if lparen.kind != TokenKind::LParen {
+			todo!()
+		}
+
+		let mut params = Vec::new();
+		while self.peek(0).kind != TokenKind::RParen {
+			let name_tok = self.next();
+			let name = if let TokenKind::Name(name) = &name_tok.kind {
+				name.clone()
+			} else {
+				todo!("{:?}", name_tok)
+			};
+
+			if self.peek(0).kind == TokenKind::Colon {
+				self.next();
+				let ty = self.parse_type();
+				params.push(Param {
+					span: Span {
+						start: name_tok.span.start,
+						end: ty.span.end,
+					},
+					name,
+					ty,
+				});
+			} else {
+				params.push(Param {
+					span: name_tok.span,
+					name,
+					ty: DEFAULT_TYPE,
+				});
+			}
+			
+			if self.peek(0).kind != TokenKind::Comma {
+				if self.peek(0).kind != TokenKind::RParen {
+					todo!()
+				}
+			} else {
+				self.next();
+			}
+		}
+
+		let rparen = self.next();
+		if rparen.kind != TokenKind::RParen {
+			todo!()
+		}
+
+		let equal = self.next();
+		if equal.kind != TokenKind::Equal {
+			todo!()
+		}
+
+		let mut body = Vec::new();
+		body.push(self.parse_mutation());
+		while self.peek(0).kind == TokenKind::Comma {
+			self.next();
+			body.push(self.parse_mutation());
+		}
+
+		Action {
+			span: Span {
+				start: name_tok.span.start,
+				end: body.last().unwrap().span.end,
+			},
+			name,
+			params,
+			body,
 		}
 	}
 

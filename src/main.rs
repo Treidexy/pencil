@@ -23,15 +23,15 @@ fn main() {
 	}
 
 	let mut parse_errors = Vec::<ParseError>::new();
-	let ast = Parser::parse_data(&tokens, &mut parse_errors);
+	let stmts = Parser::parse(&tokens, &mut parse_errors);
 	if parse_errors.len() > 0 {
 		println!("{:?}", parse_errors);
 		return;
 	} else {
-		// println!("{:?}", ast);
+		// println!("{:?}", stmts);
 	}
 
 	let mut emitter = Emitter::new();
-	emitter.emit_data(&ast);
+	emitter.emit(&stmts);
 	emitter.print();
 }
