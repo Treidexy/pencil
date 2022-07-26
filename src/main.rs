@@ -40,7 +40,8 @@ fn main() {
 
 	let mut emitter = Emitter::new();
 	emitter.emit(&stmts);
-	// emitter.print_ir();
+	emitter.print_ir();
+	return;
 
 	let module = emitter.module;
 	unsafe {

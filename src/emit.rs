@@ -17,6 +17,12 @@ macro_rules! cstr {
 	};
 }
 
+macro_rules! from_cstr {
+	($s:expr) => {
+		::std::ffi::CString::from_raw($s).to_str().unwrap()
+	};
+}
+
 pub(crate) use cstr;
 
 pub struct Emitter {
