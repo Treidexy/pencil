@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ptr::null_mut;
 
+use llvm_sys::LLVMTypeKind::*;
 use llvm_sys::analysis::LLVMVerifierFailureAction::*;
 use llvm_sys::analysis::*;
 use llvm_sys::bit_writer::LLVMWriteBitcodeToFile;
@@ -267,7 +268,36 @@ impl Emitter {
 		};
 		
 		let expr = self.emit_expr(&mutation.expr);
+		self.emit_destroy(ptr);
 		LLVMBuildStore(self.builder, expr, ptr);
+	}
+
+	unsafe fn emit_destroy(&mut self, ptr: LLVMValueRef) {
+		let ty = LLVMGetElementType(LLVMTypeOf(ptr));
+		let kind = LLVMGetTypeKind(ty);
+		match kind {
+			LLVMDoubleTypeKind => {},
+			LLVMStructTypeKind => {
+				let len = LLVMCountStructElementTypes(ty);
+				let mut ele_tys = Vec::with_capacity(len as usize);
+				ele_tys.resize(len as usize, null_mut());
+				LLVMGetStructElementTypes(ty, ele_tys.as_mut_ptr());
+				if ele_tys.len() == 2 && LLVMGetTypeKind(ele_tys[0]) == LLVMPointerTypeKind && ele_tys[1] == self.len_ty() {
+					let ele_ptr = LLVMBuildStructGEP2(self.builder, ty, ptr, 0, cstr!());
+					let ele = LLVMBuildLoad2(self.builder, ele_tys[0], ele_ptr, cstr!());
+					LLVMBuildFree(self.builder, ele);
+				} else {
+					for (i, ele_ty) in ele_tys.iter().enumerate() {
+						let ele_ptr = LLVMBuildStructGEP2(self.builder, ty, ptr, i as u32, cstr!());
+						let ele = LLVMBuildLoad2(self.builder, *ele_ty, ele_ptr, cstr!());
+						self.emit_destroy(ele)
+					}
+				}
+			},
+			_ => {
+				todo!()
+			},
+		}
 	}
 }
 
@@ -347,6 +377,7 @@ impl Emitter {
 		let ty = self.emit_ty(&var.ty.kind);
 		
 		let ptr = LLVMAddGlobal(self.module, ty, cstr!(var.name.as_str()));
+		LLVMSetInitializer(ptr, LLVMConstNull(ty));
 		let init = self.emit_expr(&var.init);
 		LLVMBuildStore(self.builder, init, ptr);
 
