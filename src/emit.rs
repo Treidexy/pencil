@@ -35,11 +35,11 @@ pub(crate) use cstr;
 
 pub struct Emitter {
 	ctx: LLVMContextRef,
-	module: LLVMModuleRef,
+	pub module: LLVMModuleRef,
 	builder: LLVMBuilderRef,
 	vars: HashMap<String, LLVMValueRef>,
 	funcs: HashMap<String, LLVMValueRef>,
-	actions: HashMap<String, LLVMValueRef>,
+	pub actions: HashMap<String, LLVMValueRef>,
 	params: HashMap<String, LLVMValueRef>,
 	param_ptrs: HashMap<String, LLVMValueRef>,
 }

@@ -5,18 +5,21 @@ use std::ptr::null_mut;
 use lex::*;
 
 mod parse;
-use llvm_sys::execution_engine::LLVMCreateMCJITCompilerForModule;
-use llvm_sys::execution_engine::LLVMExecutionEngineRef;
-use llvm_sys::execution_engine::LLVMLinkInMCJIT;
-use llvm_sys::execution_engine::LLVMMCJITCompilerOptions;
-use llvm_sys::target::LLVM_InitializeNativeAsmPrinter;
-use llvm_sys::target_machine::LLVMCodeModel::*;
 use parse::*;
 
 mod emit;
 use emit::*;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
+use llvm_sys::execution_engine::*;
+use llvm_sys::target::*;
+use llvm_sys::target_machine::LLVMCodeModel::*;
+
+macro_rules! from_cstr {
+	($s:expr) => {
+		::std::ffi::CString::from_raw($s).to_str().unwrap()
+	};
+}
 
 fn main() {
 	let src = std::fs::read_to_string("./samples/test.pencil").unwrap();
@@ -42,24 +45,30 @@ fn main() {
 	emitter.emit(&stmts);
 	// emitter.print_ir();
 
-	// let module = emitter.module;
-	// unsafe {
-	// 	LLVMLinkInMCJIT();
-	// 	LLVM_InitializeNativeAsmPrinter();
-	// 	LLVM_InitializeNativeAsmPrinter();
+	
 
-	// 	let mut engine: LLVMExecutionEngineRef = null_mut();
-	// 	let mut options = LLVMMCJITCompilerOptions {
-	// 		OptLevel: 0,
-	// 		CodeModel: LLVMCodeModelDefault,
-	// 		NoFramePointerElim: 1,
-	// 		EnableFastISel: 0,
-	// 		MCJMM: null_mut(),
-	// 	};
-	// 	let mut err = null_mut::<i8>();
-	// 	if LLVMCreateMCJITCompilerForModule(&mut engine as *mut LLVMExecutionEngineRef, module,
-	// 		&mut options as *mut LLVMMCJITCompilerOptions, size_of::<LLVMMCJITCompilerOptions>(), &mut err as *mut *mut i8) == 1 {
-	// 		panic!("Error creating JIT compiler: {}", std::ffi::CString::from_raw(err).to_str().unwrap());
-	// 	}
-	// }
+	unsafe {
+		LLVMLinkInMCJIT();
+		LLVM_InitializeNativeAsmPrinter();
+		let mut engine: LLVMExecutionEngineRef = null_mut();
+		let mut options = LLVMMCJITCompilerOptions {
+			OptLevel: 0,
+			CodeModel: LLVMCodeModelDefault,
+			NoFramePointerElim: 1,
+			EnableFastISel: 0,
+			MCJMM: null_mut(),
+		};
+
+		let err: *mut i8 = null_mut();
+		if LLVMCreateMCJITCompilerForModule(&mut engine as *mut LLVMExecutionEngineRef, emitter.module,
+			&mut options as *mut LLVMMCJITCompilerOptions, size_of::<LLVMMCJITCompilerOptions>(), &mut err as *mut *mut i8) != 0 {
+			panic!("{}", from_cstr!(err));
+		}
+
+		let actions = &emitter.actions;
+		for (name, action) in actions {
+			let ptr = LLVMGetPointerToGlobal(engine, action);
+			println!("{}!", name);
+		}
+	}
 }
